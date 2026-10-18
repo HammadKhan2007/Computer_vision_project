@@ -1,0 +1,27 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large MediaPipe model weights (automatically downloaded on first run)
+pose_landmarker_full.task
+*.task
+
+# Video files (avoid bloating Git repository)
+*.mp4
+*.avi
+*.mov
+*.mkv
+samples/*.mp4
+samples/*.json
+
+# Virtual environments & IDE
+venv/
+.venv/
+env/
+.idea/
+.vscode/
+
+# OS specific files
+Thumbs.db
+.DS_Store
