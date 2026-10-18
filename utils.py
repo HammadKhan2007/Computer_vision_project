@@ -1,15 +1,15 @@
 """
-Cricket Bowling Action Visualizer and HUD Overlay Utilities
-===========================================================
-Draws skeletons, elbow angle arcs, live metric gauges,
-delivery phase labels, and generates performance graphs.
+Cricket Bowling Action Visualizer and HUD Overlay Utilities (V2)
+================================================================
+Broadcast-style skeletal tracking, camera-view indicators,
+dual-arm overlays, and biomechanical timeline plots.
 """
 
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, List, Optional
-from bowling_analyzer import BowlingActionResult, FrameAnalysis, LANDMARKS
+from bowling_analyzer import BowlingActionResult, FrameAnalysis, ArmAnalysisData
 
 
 # Color Palette (BGR format)
@@ -18,15 +18,17 @@ COLOR_CRIMSON_RED = (50, 50, 230)
 COLOR_CYAN = (230, 200, 40)
 COLOR_AMBER = (30, 165, 255)
 COLOR_WHITE = (255, 255, 255)
-COLOR_DARK_GRAY = (35, 35, 35)
+COLOR_DARK_GRAY = (28, 28, 28)
 COLOR_ACCENT_BLUE = (255, 120, 40)
+COLOR_DIMMED_GRAY = (110, 110, 110)
 
 
 def draw_hud(
     frame: np.ndarray,
     analysis: FrameAnalysis,
     max_extension_so_far: float,
-    threshold: float = 15.0
+    threshold: float = 15.0,
+    camera_view: str = "side_on"
 ) -> np.ndarray:
     """
     Overlays a professional broadcast-style HUD on the video frame.
@@ -35,25 +37,26 @@ def draw_hud(
     overlay = frame.copy()
 
     # 1. Top HUD Bar (Semi-transparent black banner)
-    hud_height = 90
+    hud_height = 92
     cv2.rectangle(overlay, (0, 0), (w, hud_height), COLOR_DARK_GRAY, -1)
-    alpha = 0.75
+    alpha = 0.78
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
-    # 2. Project Title / Branding
+    # 2. Project Title / Branding with View Badge
+    view_label = "SIDE-ON VIEW" if camera_view == "side_on" else "FRONT-ON VIEW"
     cv2.putText(
         frame,
-        "CRICKET BOWLING ACTION ANALYZER (ICC LAW 21.2)",
+        f"CRICKET BOWLING ACTION ANALYZER  |  {view_label}  |  ARM: {analysis.bowling_arm.upper()}",
         (20, 28),
         cv2.FONT_HERSHEY_DUPLEX,
-        0.65,
+        0.58,
         COLOR_WHITE,
         1,
         cv2.LINE_AA
     )
 
     # 3. Status Badge (Delivery Phase)
-    phase_bg_color = COLOR_AMBER if analysis.is_delivery_phase else (120, 120, 120)
+    phase_bg_color = COLOR_AMBER if analysis.is_delivery_phase else COLOR_DIMMED_GRAY
     if "Release" in analysis.phase_label:
         phase_bg_color = COLOR_ACCENT_BLUE
 
@@ -61,7 +64,7 @@ def draw_hud(
     cv2.putText(
         frame,
         phase_text,
-        (20, 65),
+        (20, 68),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.65,
         phase_bg_color,
@@ -70,11 +73,11 @@ def draw_hud(
     )
 
     # 4. Live Metrics: Elbow Angle & Max Extension
-    angle_text = f"ELBOW ANGLE: {analysis.elbow_angle:.1f}\xba"
+    angle_text = f"ELBOW: {analysis.elbow_angle:.1f}\xba"
     cv2.putText(
         frame,
         angle_text,
-        (w // 2 - 120, 65),
+        (w // 2 - 110, 68),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.65,
         COLOR_CYAN,
@@ -88,10 +91,11 @@ def draw_hud(
     ext_text = f"EXT: {max_extension_so_far:.1f}\xba / {threshold:.0f}\xba"
     status_label = "[ UNFAIR - CHUCK ]" if is_exceeded else "[ FAIR ACTION ]"
 
+    # Position at right side
     cv2.putText(
         frame,
         f"{ext_text}  {status_label}",
-        (w - 380, 65),
+        (w - 380, 68),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.65,
         ext_color,
@@ -100,7 +104,7 @@ def draw_hud(
     )
 
     # 5. Bowling Arm Skeleton Highlight & Angle Arc
-    if analysis.is_valid_detection:
+    if analysis.is_valid_detection or analysis.elbow_pt != (0, 0):
         sh = analysis.shoulder_pt
         el = analysis.elbow_pt
         wr = analysis.wrist_pt
@@ -111,7 +115,7 @@ def draw_hud(
         cv2.line(frame, sh, el, arm_color, 4, cv2.LINE_AA)
         cv2.line(frame, el, wr, arm_color, 4, cv2.LINE_AA)
 
-        # Draw Joints
+        # Draw Joint Circles
         cv2.circle(frame, sh, 8, COLOR_WHITE, -1, cv2.LINE_AA)
         cv2.circle(frame, sh, 10, arm_color, 2, cv2.LINE_AA)
 
@@ -121,12 +125,9 @@ def draw_hud(
         cv2.circle(frame, wr, 8, COLOR_WHITE, -1, cv2.LINE_AA)
         cv2.circle(frame, wr, 10, arm_color, 2, cv2.LINE_AA)
 
-        # Angle degree label floating near elbow
-        label_x = el[0] + 15
-        label_y = el[1] - 15
-        # Ensure within frame bounds
-        label_x = min(max(label_x, 10), w - 120)
-        label_y = min(max(label_y, 110), h - 20)
+        # Floating angle label near elbow
+        label_x = min(max(el[0] + 15, 10), w - 120)
+        label_y = min(max(el[1] - 15, 110), h - 20)
 
         cv2.rectangle(
             frame,
@@ -164,9 +165,12 @@ def render_annotated_video(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # FourCC codec - use avc1 or mp4v
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    active_arm_data = analysis_result.active_arm_data
+    if active_arm_data is None:
+        active_arm_data = analysis_result.right_arm
 
     running_min_angle = 180.0
     running_max_ext = 0.0
@@ -174,12 +178,11 @@ def render_annotated_video(
 
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret or frame_idx >= len(analysis_result.frame_analyses):
+        if not ret or frame_idx >= len(active_arm_data.frame_analyses):
             break
 
-        current_analysis = analysis_result.frame_analyses[frame_idx]
+        current_analysis = active_arm_data.frame_analyses[frame_idx]
 
-        # Update running extension during delivery phase
         if current_analysis.is_delivery_phase:
             running_min_angle = min(running_min_angle, current_analysis.elbow_angle)
             current_ext = max(0.0, current_analysis.elbow_angle - running_min_angle)
@@ -189,7 +192,8 @@ def render_annotated_video(
             frame=frame,
             analysis=current_analysis,
             max_extension_so_far=running_max_ext,
-            threshold=analysis_result.threshold_degrees
+            threshold=analysis_result.threshold_degrees,
+            camera_view=analysis_result.detected_camera_view
         )
 
         out.write(annotated_frame)
@@ -205,20 +209,22 @@ def render_annotated_video(
 
 def generate_angle_plot_figure(result: BowlingActionResult) -> plt.Figure:
     """
-    Generates a high-quality matplotlib figure showing the elbow angle trajectory,
+    Generates a matplotlib figure showing the elbow angle trajectory,
     highlighting the critical delivery phase and the 15-degree ICC threshold.
     """
+    arm_data = result.active_arm_data
+    if arm_data is None:
+        arm_data = result.right_arm
+
     fig, ax = plt.subplots(figsize=(10, 4.2), facecolor='#0E1117')
     ax.set_facecolor('#161B22')
 
-    timestamps = [fa.timestamp for fa in result.frame_analyses]
-    angles = [fa.elbow_angle for fa in result.frame_analyses]
-    delivery_flags = [fa.is_delivery_phase for fa in result.frame_analyses]
+    timestamps = [fa.timestamp for fa in arm_data.frame_analyses]
+    angles = [fa.elbow_angle for fa in arm_data.frame_analyses]
+    delivery_flags = [fa.is_delivery_phase for fa in arm_data.frame_analyses]
 
-    # Plot general angle timeline
-    ax.plot(timestamps, angles, color='#38bdf8', linewidth=2, label='Elbow Angle (°)')
+    ax.plot(timestamps, angles, color='#38bdf8', linewidth=2, label=f'{arm_data.arm_name.capitalize()} Elbow Angle (°)')
 
-    # Highlight delivery phase region
     delivery_times = [t for t, d in zip(timestamps, delivery_flags) if d]
     if delivery_times:
         start_t = min(delivery_times)
@@ -228,33 +234,30 @@ def generate_angle_plot_figure(result: BowlingActionResult) -> plt.Figure:
             end_t,
             color='#fbbf24',
             alpha=0.2,
-            label='Critical Delivery Window (Horizontal to Release)'
+            label='Delivery Arc (Horizontal to Release)'
         )
 
-    # Plot min angle and release angle lines
     ax.axhline(
-        result.min_elbow_angle,
+        arm_data.min_elbow_angle,
         color='#94a3b8',
         linestyle='--',
         alpha=0.7,
-        label=f'Min Angle ({result.min_elbow_angle}°)'
+        label=f'Min Angle ({arm_data.min_elbow_angle}°)'
     )
-    
-    # 15 degree threshold band above min angle
-    icc_limit = result.min_elbow_angle + result.threshold_degrees
+
+    icc_limit = arm_data.min_elbow_angle + result.threshold_degrees
     ax.axhline(
         icc_limit,
-        color='#ef4444' if not result.is_fair else '#22c55e',
+        color='#ef4444' if not arm_data.is_fair else '#22c55e',
         linestyle='-',
         linewidth=1.8,
         label=f'ICC 15° Limit ({icc_limit:.1f}°)'
     )
 
-    # Formatting
     ax.set_title(
-        f"Elbow Angle Kinematics — Verdict: {result.verdict} (Max Ext: {result.max_elbow_extension}°)",
+        f"{arm_data.arm_name.capitalize()}-Arm Kinematics ({result.detected_camera_view.replace('_', ' ').title()}) — {arm_data.verdict} (Max Ext: {arm_data.max_elbow_extension}°)",
         color='#f8fafc',
-        fontsize=13,
+        fontsize=12,
         fontweight='bold',
         pad=12
     )
